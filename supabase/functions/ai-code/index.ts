@@ -20,36 +20,43 @@ serve(async (req) => {
     const body = await req.json();
     const { action } = body as { action: string };
 
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    if (!OPENAI_API_KEY) {
-      return new Response(JSON.stringify({ error: "Missing OPENAI_API_KEY" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    // Sử dụng Gemini API Key
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      return new Response(JSON.stringify({ error: "Missing GEMINI_API_KEY" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    const system = `You are DevForge, an AI code generator. Always answer STRICTLY in JSON matching this TypeScript type:\ninterface CodeFile { path: string; language: string; content: string }\ninterface Response { files: CodeFile[]; summary?: string }\nRules:\n- Always include language for each file (javascript, typescript, html, css, python, markdown, json).\n- Prefer simple, runnable projects.\n- For small apps, include index.html, styles.css, and main.js at minimum.\n- Keep explanations brief in 'summary'.`;
+    // Hàm gọi Gemini
+    async function callGemini(messages: Array<{ role: string; content: string }>) {
+      // Chuyển đổi messages sang format của Gemini
+      const history = messages.map((m) => ({
+        role: m.role === "system" ? "user" : m.role, // Gemini không có "system", gộp vào "user"
+        parts: [{ text: m.content }]
+      }));
 
-    async function callOpenAI(messages: Array<{ role: string; content: string }>) {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "gpt-4.1-2025-04-14",
-          temperature: 0.2,
-          messages,
-          response_format: { type: "json_object" },
+          contents: history,
+          generationConfig: {
+            temperature: 0.2,
+            response_mime_type: "application/json"
+          }
         }),
       });
       const data = await res.json();
-      const content = data.choices?.[0]?.message?.content ?? "{}";
+      // Lấy kết quả JSON từ Gemini
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
       return JSON.parse(content);
     }
 
     if (action === "generate") {
       const { prompt } = body as { prompt: string };
       const user = `Build the following as a small runnable app. Include minimal files.\nTask: ${prompt}`;
-      const out = await callOpenAI([
+      const out = await callGemini([
         { role: "system", content: system },
         { role: "user", content: user },
       ]);
@@ -59,7 +66,7 @@ serve(async (req) => {
     if (action === "explain") {
       const { code } = body as { code: string };
       const user = `Explain this code in plain language and include it as a markdown file explanation.md with a short summary. Provide the original code as code.txt too.\n\nCODE:\n${code}`;
-      const out = await callOpenAI([
+      const out = await callGemini([
         { role: "system", content: system },
         { role: "user", content: user },
       ]);
@@ -69,7 +76,7 @@ serve(async (req) => {
     if (action === "edit") {
       const { code, instruction } = body as { code: string; instruction: string };
       const user = `Apply the following edits to the code and return the full modified file(s). If multiple files are implied, split logically.\nInstruction: ${instruction}\n\nCODE:\n${code}`;
-      const out = await callOpenAI([
+      const out = await callGemini([
         { role: "system", content: system },
         { role: "user", content: user },
       ]);
@@ -95,7 +102,7 @@ serve(async (req) => {
 
       const user = `You are given the raw HTML and extracted CSS of a website. Reconstruct a clean, minimal, functional clone with these files: index.html, styles.css, main.js. Keep semantics, typography, and key layout. Replace external assets with placeholders if necessary.\nHTML:\n${html}\n\nCSS:\n${cssContents.join("\n\n")}\n`;
 
-      const out = await callOpenAI([
+      const out = await callGemini([
         { role: "system", content: system },
         { role: "user", content: user },
       ]);
